@@ -22,6 +22,8 @@ var has = require('has');
 var bresolve = require('browser-resolve');
 var resolve = require('resolve');
 
+var bPragma = require('browserify-pragma');
+
 module.exports = Browserify;
 inherits(Browserify, EventEmitter);
 
@@ -369,8 +371,11 @@ Browserify.prototype._createPipeline = function (opts) {
         dedupe: true,
         expose: this._expose
     };
-    this._bpack = bpack(xtend(opts, { raw: true }));
-    
+    this._bpack = bpack(xtend(opts, {
+      raw: true,
+      pragma: bPragma.generate(require('./package.json')) + '\n',
+    }));
+
     var pipeline = splicer.obj([
         'record', [ this._recorder() ],
         'deps', [ this._mdeps ],
