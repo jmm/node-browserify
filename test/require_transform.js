@@ -20,6 +20,14 @@ var requirePath = path.join(__dirname, 'tr', 'package.json');
         requirePath: requirePath,
         transformVia: 'opts',
     }],
+
+    ['b.require() file stream with file.transform prop', {
+        transformVia: 'file'
+    }],
+
+    ['b.require() file stream with opts.transform prop', {
+        transformVia: 'opts'
+    }],
 ].forEach(function (cfg) {
     test(cfg[0], function (t) {
         requireTest(t, cfg[1]);
