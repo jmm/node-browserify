@@ -144,6 +144,11 @@ Browserify.prototype.require = function (file, opts) {
                 id: id
             };
             if (rec.entry) rec.order = order;
+
+            // Prevent .require() from adding transforms. See: module-deps and
+            // https://github.com/substack/node-browserify/pull/1057
+            delete rec.transform;
+
             self.pipeline.write(rec);
             
             if (-- self._pending === 0) self.emit('_ready');
@@ -183,8 +188,11 @@ Browserify.prototype.require = function (file, opts) {
         row.file = path.resolve(basedir, row.file);
         row.order = self._entryOrder ++;
     }
-    
-    if (opts.transform === false) row.transform = false;
+
+    // Prevent .require() from adding transforms. See: module-deps and
+    // https://github.com/substack/node-browserify/pull/1057
+    delete row.transform;
+
     self.pipeline.write(row);
     return self;
 };
