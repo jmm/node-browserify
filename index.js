@@ -106,16 +106,43 @@ Browserify.prototype.require = function (file, opts) {
             }
             else self.require(x, opts);
         });
-        return this;
+        return self;
     }
     
     if (!opts) opts = {};
+
+    var row;
+
+    // Perform pre-write processing common to stream / non-stream files, then
+    // write.
+    function writeRow (row) {
+        // Prevent .require() from adding transforms. See: module-deps and
+        // https://github.com/substack/node-browserify/pull/1057
+        delete row.transform;
+
+        row.entry = !!row.entry;
+
+        if (row.entry) {
+            row.order = order;
+        }
+
+        self.pipeline.write(row);
+    }
+
+    // File may or may not need `order`.
+    var order;
+
+    // Set order value that will apply to row.
+    function setOrder () {
+        return (order = self._entryOrder ++);
+    }
+
     var basedir = defined(opts.basedir, self._options.basedir, process.cwd());
     var expose = opts.expose;
     if (file === expose && /^[\.]/.test(expose)) {
         expose = '/' + path.relative(basedir, expose);
     }
-    if (expose === undefined && this._options.exposeAll) {
+    if (expose === undefined && self._options.exposeAll) {
         expose = true;
     }
     if (expose === true) {
@@ -124,7 +151,9 @@ Browserify.prototype.require = function (file, opts) {
     
     if (isStream(file)) {
         self._pending ++;
-        var order = self._entryOrder ++;
+        // Unconditional, because it'll be used in the sham file name even if
+        // not an entry file.
+        setOrder();
         file.pipe(concat(function (buf) {
             var filename = opts.file || file.file || path.join(
                 basedir,
@@ -137,26 +166,20 @@ Browserify.prototype.require = function (file, opts) {
             if (!opts.entry && self._options.exports === undefined) {
                 self._bpack.hasExports = true;
             }
-            var rec = {
+            row = {
                 source: buf.toString('utf8'),
-                entry: defined(opts.entry, false),
+                entry: opts.entry,
                 file: filename,
                 id: id
             };
-            if (rec.entry) rec.order = order;
 
-            // Prevent .require() from adding transforms. See: module-deps and
-            // https://github.com/substack/node-browserify/pull/1057
-            delete rec.transform;
-
-            self.pipeline.write(rec);
-            
+            writeRow(row);
             if (-- self._pending === 0) self.emit('_ready');
         }));
-        return this;
+        return self;
     }
-    
-    var row;
+    else if (opts.external) return self.external(file, opts);
+
     if (typeof file === 'object') {
         row = xtend(file, opts);
     }
@@ -176,24 +199,17 @@ Browserify.prototype.require = function (file, opts) {
         // resolves the pathname.
         row.expose = row.id;
     }
-    
-    if (opts.external) return self.external(file, opts);
-    if (row.entry === undefined) row.entry = false;
-    
+
     if (!row.entry && self._options.exports === undefined) {
         self._bpack.hasExports = true;
     }
     
     if (row.entry) {
         row.file = path.resolve(basedir, row.file);
-        row.order = self._entryOrder ++;
+        setOrder();
     }
 
-    // Prevent .require() from adding transforms. See: module-deps and
-    // https://github.com/substack/node-browserify/pull/1057
-    delete row.transform;
-
-    self.pipeline.write(row);
+    writeRow(row);
     return self;
 };
 
