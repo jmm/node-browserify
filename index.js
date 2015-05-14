@@ -99,20 +99,78 @@ function Browserify (files, opts) {
     });
 }
 
-Browserify.prototype.require = function (file, opts) {
+/**
+ * Handle streams passed to b.require().
+ * Apply special stream-related handling, then pass to bRequire() (again) for
+ * the rest.
+ */
+function requireStream (file, opts) {
+    var self = this;
+    opts = xtend(opts || {});
+    self._pending ++;
+
+    var cfg = {
+        stream: true,
+        row: {
+            order: self._entryOrder ++,
+        },
+    };
+
+    // Differs from the non-stream implementation which prefers opts.file over
+    // file.file. Taking advantage of that here to make sure this value is used
+    // in bRequire(), without mutating `file`.
+    opts.file = file.file || opts.file || path.join(
+        opts.basedir,
+        '_stream_' + cfg.row.order + '.js'
+    );
+
+    file.pipe(concat(function (buf) {
+        cfg.row.source = buf.toString('utf8');
+        bRequire.call(self, file, opts, cfg);
+    }));
+    return self;
+}
+// requireStream
+
+/**
+ * The meat of b.require().
+ * Allows setting options / row props internally that shouldn't be exposed via
+ * the API.
+ *
+ * @param object|undefined cfg Options for internal use only.
+ *
+ * bool|undefined cfg.stream true indicates that the file is a stream and
+ * special stream handling has already been applied.
+ *
+ * object|undefined cfg.row Props to merge into row before pushing.
+ */
+function bRequire (file, opts, cfg) {
     var self = this;
     if (isarray(file)) {
         file.forEach(function (x) {
             if (typeof x === 'object') {
-                self.require(x.file, xtend(opts, x));
+                bRequire.call(self, x.file, xtend(opts, x));
             }
-            else self.require(x, opts);
+            else bRequire.call(self, x, opts);
         });
         return this;
     }
     
     if (!opts) opts = {};
+    if (!cfg) cfg = {};
+    if (!cfg.row) cfg.row = {};
+
     var basedir = defined(opts.basedir, self._options.basedir, process.cwd());
+
+    if (!cfg.stream) {
+        if (isStream(file)) {
+            return requireStream.call(this, file, xtend(opts, {
+                basedir: basedir
+            }));
+        }
+        else if (opts.external) return self.external(file, opts);
+    }
+
     var expose = opts.expose;
     if (file === expose && /^[\.]/.test(expose)) {
         expose = '/' + path.relative(basedir, expose);
@@ -123,39 +181,11 @@ Browserify.prototype.require = function (file, opts) {
     if (expose === true) {
         expose = '/' + path.relative(basedir, file);
     }
-    
-    if (isStream(file)) {
-        self._pending ++;
-        var order = self._entryOrder ++;
-        file.pipe(concat(function (buf) {
-            var filename = opts.file || file.file || path.join(
-                basedir,
-                '_stream_' + order + '.js'
-            );
-            var id = file.id || expose || filename;
-            if (expose || opts.entry === false) {
-                self._expose[id] = filename;
-            }
-            if (!opts.entry && self._options.exports === undefined) {
-                self._bpack.hasExports = true;
-            }
-            var rec = {
-                source: buf.toString('utf8'),
-                entry: defined(opts.entry, false),
-                file: filename,
-                id: id
-            };
-            if (rec.entry) rec.order = order;
-            if (rec.transform === false) rec.transform = false;
-            self.pipeline.write(rec);
-            
-            if (-- self._pending === 0) self.emit('_ready');
-        }));
-        return this;
-    }
-    
+
     var row;
     if (typeof file === 'object') {
+        // Differs from the stream implementation, which prefers file.file over
+        // opts.file.
         row = xtend(file, opts);
     }
     else if (isExternalModule(file)) {
@@ -167,15 +197,15 @@ Browserify.prototype.require = function (file, opts) {
     }
     
     if (!row.id) {
-        row.id = expose || file;
+        row.id = expose || row.file;
     }
     if (expose || !row.entry) {
         // Make this available to mdeps so that it can assign the value when it
         // resolves the pathname.
         row.expose = row.id;
+        if (cfg.stream) self._expose[row.id] = row.file;
     }
-    
-    if (opts.external) return self.external(file, opts);
+
     if (row.entry === undefined) row.entry = false;
     
     if (!row.entry && self._options.exports === undefined) {
@@ -184,12 +214,22 @@ Browserify.prototype.require = function (file, opts) {
     
     if (row.entry) {
         row.file = path.resolve(basedir, row.file);
-        row.order = self._entryOrder ++;
+        row.order = cfg.row.order || self._entryOrder ++;
     }
     
     if (opts.transform === false) row.transform = false;
+
+    row = xtend(row, cfg.row);
+
     self.pipeline.write(row);
+    if (cfg.stream && -- self._pending === 0) self.emit('_ready');
+
     return self;
+}
+// bRequire
+
+Browserify.prototype.require = function (file, opts) {
+  return bRequire.call(this, file, opts);
 };
 
 Browserify.prototype.add = function (file, opts) {
